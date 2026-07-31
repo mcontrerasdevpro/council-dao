@@ -90,35 +90,59 @@ export default function App() {
         {showForm ? (
           <ProposalForm
             onCancel={() => setShowForm(false)}
-            onSubmit={async (formData) => {
-              if (!wallet.signer) {
-                setErrorMsg("Conecta tu wallet antes de presentar una propuesta.");
-                return;
-              }
-              setLedger(prev => ({ ...prev, loading: true }));
-              setErrorMsg("Subiendo propuesta estructurada a IPFS...");
-              try {
-                await new Promise(resolve => setTimeout(resolve, 1500));
-                const mockCid = "ipfs://QmXoypizjW3WknFixtUR4Q61hLk7JJ6rZPGxy6Av575UNI";
+           onSubmit={async (formData) => {
+  if (!wallet.signer) {
+    setErrorMsg("Conecta tu wallet antes de presentar una propuesta.");
+    return;
+  }
+  
+  setLedger(prev => ({ ...prev, loading: true }));
+  setErrorMsg("Subiendo JSON estructurado de la papeleta a IPFS...");
+  
+  try {
+    
+    const ipfsResponse = await fetch("https://pinata.cloud", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        // Aquí metería JWT de Pinata para producción
+        Authorization: `Bearer TU_PINATA_JWT_TOKEN` 
+      },
+      body: JSON.stringify(formData)
+    });
+    
+    if (!ipfsResponse.ok) throw new Error("Fallo al subir metadatos a la pasarela IPFS");
+    const ipfsData = await ipfsResponse.json();
+    const cleanCid = `ipfs://${ipfsData.IpfsHash}`;  
 
-                setErrorMsg("Esperando firma en tu wallet para depositar colateral...");
-                const REGISTRY_ABI = ["function submit(string calldata cid) payable returns (uint256)"];
-                const registryContract = new ethers.Contract(CFG.registry, REGISTRY_ABI, wallet.signer);
-                const feeWei = ethers.parseEther(ledger.fee !== "···" ? ledger.fee : "0.001");
+    setErrorMsg("Esperando firma para depositar colateral en Base Sepolia...");
+   
+    const REGISTRY_WRITE_ABI = ["function submit(string calldata cid) payable returns (uint256)"];
+    
+    const registryContract = new ethers.Contract(
+      CFG.registry,
+      REGISTRY_WRITE_ABI,
+      wallet.signer
+    );
 
-                const tx = await registryContract.submit(mockCid, { value: feeWei });
-                setErrorMsg(`Tx enviada: ${tx.hash.slice(0, 8)}... Esperando bloque...`);
-                await tx.wait();
+    const feeWei = ethers.parseEther(ledger.fee !== "···" ? ledger.fee : "0.001");
+    const tx = await registryContract.submit(cleanCid, { value: feeWei });
+    
+    setErrorMsg(`Tx enviada: ${tx.hash.slice(0, 8)}... Esperando confirmación de Base...`);
+    
+    const receipt = await tx.wait();
+    console.log("¡Propuesta registrada con éxito en el bloque!", receipt.blockNumber);
 
-                setErrorMsg("");
-                setShowForm(false);
-                refreshData();
-              } catch (e) {
-                console.error(e);
-                setErrorMsg(e.shortMessage || e.message || "Error al interactuar con la red.");
-                setLedger(prev => ({ ...prev, loading: false }));
-              }
-            }}
+    setErrorMsg("");
+    setShowForm(false);
+    refreshData(); 
+
+  } catch (e) {
+    console.error("Fallo crítico en flujo de publicación:", e);
+    setErrorMsg(e.shortMessage || e.message || "Error desconocido al procesar la idea.");
+    setLedger(prev => ({ ...prev, loading: false }));
+  }
+}}
           />
         ) : (
           <div className="board">

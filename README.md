@@ -1,23 +1,16 @@
-# council-dao
+# React + Vite
 
-A self-contained, static web interface for a multisig-governed council.
+This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 
-The council reads a public queue of submitted ideas from an on-chain registry and lets its signers approve or reject each one. Approving an idea promotes it into an on-chain proposal; rejecting it closes it. Anyone can open the app and read the queue; write actions require a connected wallet that is an owner of the governing Safe.
+Currently, two official plugins are available:
 
-## Features
+- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
+- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
 
-- Read-only view of the idea queue and each idea's state, open to anyone.
-- Approve / reject actions gated to Safe owners, executed through the Safe
-  (`approveHash` + `execTransaction`).
-- Per-idea tally of on-chain approvals against the Safe threshold.
-- No backend and no build step. Everything (including dependencies) is inlined
-  into a single HTML file, so it can be served from any static host or a
-  content-addressed network.
+## React Compiler
 
-## Usage
+The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
 
-Open `index.html` in a browser, or serve the folder from any static file host. Set the target chain and registry address in the configuration block at the top of the file before deploying.
+## Expanding the ESLint configuration
 
-## License
-
-Licensed under the GNU General Public License v3.0. See [LICENSE](LICENSE).
+If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.

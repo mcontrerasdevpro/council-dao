@@ -5,6 +5,7 @@ import Ledger from './components/Layout/Ledger';
 import Column from './components/Board/Column';
 import { OverlaySheet } from './components/DetailSheet/OverlaySheet';
 import { decodeIdeas, formatEther } from './hooks/cryptoUtils';
+import ProposalForm from './components/Board/ProposalForm';
 
 const STATUS_KEYS = ["pending", "approved", "rejected"];
 
@@ -13,6 +14,8 @@ export default function App() {
   const [ledger, setLedger] = useState({ total: 0, fee: "···", base: "···", safe: "···", proposals: "···", loading: true });
   const [ideas, setIdeas] = useState([]);
   const [selectedIdea, setSelectedIdea] = useState(null);
+
+  const [showForm, setShowForm] = useState(false);
 
   const pad32 = (n) => BigInt(n).toString(16).padStart(64, "0");
 
@@ -64,25 +67,70 @@ export default function App() {
     <>
       <div className="wrap">
         <Masthead />
+        <div className="rule-heavy"></div>
+
         {errorMsg && <div className="banner show">{errorMsg}</div>}
         <Ledger ledger={ledger} />
 
-        <div className="board-head">
-          <h2>Ideas</h2>
-          <span className="qcount">
-            {ledger.loading ? "cargando" : ledger.total === 0 ? "· cola vacía" : `· ${ledger.total} en total`}
-          </span>
+        <div className="board-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: '14px' }}>
+            <h2>Ideas</h2>
+            <span className="qcount">
+              {ledger.loading ? "cargando" : ledger.total === 0 ? "· cola vacía" : `· ${ledger.total} en total`}
+            </span>
+          </div>
+
+          {!showForm && (
+            <button className="btn" onClick={() => setShowForm(true)} style={{ background: 'var(--accent)' }}>
+              + Proponer Idea
+            </button>
+          )}
         </div>
 
-        <div className="board">
-          <Column title="Pendientes" idx="01" badgeClass="pending" ideas={buckets.pending} isPendingColumn={true} onSelect={setSelectedIdea} />
-          <Column title="Aprobadas" idx="02" badgeClass="approved" ideas={buckets.approved} onSelect={setSelectedIdea} />
-          <Column title="Rechazadas" idx="03" badgeClass="rejected" ideas={buckets.rejected} onSelect={setSelectedIdea} />
-        </div>
+        {showForm ? (
+          <ProposalForm
+            onCancel={() => setShowForm(false)}
+            onSubmit={async (formData) => {
+              if (!wallet.signer) {
+                setErrorMsg("Conecta tu wallet antes de presentar una propuesta.");
+                return;
+              }
+              setLedger(prev => ({ ...prev, loading: true }));
+              setErrorMsg("Subiendo propuesta estructurada a IPFS...");
+              try {
+                await new Promise(resolve => setTimeout(resolve, 1500));
+                const mockCid = "ipfs://QmXoypizjW3WknFixtUR4Q61hLk7JJ6rZPGxy6Av575UNI";
+
+                setErrorMsg("Esperando firma en tu wallet para depositar colateral...");
+                const REGISTRY_ABI = ["function submit(string calldata cid) payable returns (uint256)"];
+                const registryContract = new ethers.Contract(CFG.registry, REGISTRY_ABI, wallet.signer);
+                const feeWei = ethers.parseEther(ledger.fee !== "···" ? ledger.fee : "0.001");
+
+                const tx = await registryContract.submit(mockCid, { value: feeWei });
+                setErrorMsg(`Tx enviada: ${tx.hash.slice(0, 8)}... Esperando bloque...`);
+                await tx.wait();
+
+                setErrorMsg("");
+                setShowForm(false);
+                refreshData();
+              } catch (e) {
+                console.error(e);
+                setErrorMsg(e.shortMessage || e.message || "Error al interactuar con la red.");
+                setLedger(prev => ({ ...prev, loading: false }));
+              }
+            }}
+          />
+        ) : (
+          <div className="board">
+            <Column title="Pendientes" idx="01" badgeClass="pending" ideas={buckets.pending} isPendingColumn={true} onSelect={setSelectedIdea} />
+            <Column title="Aprobadas" idx="02" badgeClass="approved" ideas={buckets.approved} onSelect={setSelectedIdea} />
+            <Column title="Rechazadas" idx="03" badgeClass="rejected" ideas={buckets.rejected} onSelect={setSelectedIdea} />
+          </div>
+        )}
       </div>
 
       {selectedIdea && (
-        <DetailOverlay idea={selectedIdea} onClose={() => setSelectedIdea(null)} />
+        <OverlaySheet active={selectedIdea} onClose={() => setSelectedIdea(null)} />
       )}
     </>
   );

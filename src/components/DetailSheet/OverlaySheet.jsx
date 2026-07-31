@@ -119,20 +119,17 @@ export const OverlaySheet = ({ active, onClose }) => {
 
   const handleAnonymousVote = () => {
     if (typeof Worker !== "undefined") {
-      // Inicializamos el Worker apuntando a nuestro script criptográfico
       const worker = new Worker(new URL("../../hooks/zkpWorker.js", import.meta.url));
 
-      // Escuchamos las señales asíncronas de la prueba biométrica
       worker.onmessage = (event) => {
         const { status, message, proof, publicSignals } = event.data;
 
         if (status === "PROCESSING" || status === "GENERATING") {
-          console.log("🛠️ ZKP Status:", message); // Aquí actualizarías un estado local 'loadingMsg'
+          console.log("🛠️ ZKP Status:", message); 
         }
         if (status === "SUCCESS") {
           console.log("✅ ¡Prueba ZKP Generada de forma anónima!", proof, publicSignals);
-          // Aquí lanzarías la transacción de voto encriptado al contrato de Votaciones
-          worker.terminate(); // Cerramos el hilo para liberar memoria RAM
+          worker.terminate(); 
         }
         if (status === "ERROR") {
           console.error("❌ Error criptográfico:", event.data.error);
@@ -140,7 +137,6 @@ export const OverlaySheet = ({ active, onClose }) => {
         }
       };
 
-      // Lanzamos la acción enviando los parámetros biométricos simulados
       worker.postMessage({
         action: "GENERATE_PROOF",
         passportData: { nullifierHash: "0xabc..." }

@@ -5,7 +5,6 @@ const Web3Context = createContext();
 
 export const useWeb3 = () => useContext(Web3Context);
 
-// CORREGIDO: Añadimos export aquí delante
 export const CFG = {
   rpc: "https://sepolia.base.org",
   registry: "0xba91BdcC80bDbe8a0aec5c3219a6C076E7358A5b",
@@ -27,7 +26,6 @@ export const Web3Provider = ({ children }) => {
   const [errorMsg, setErrorMsg] = useState("");
   const [triggerRefresh, setTriggerRefresh] = useState(0);
 
-  // Auxiliares de lectura de bajo nivel heredadas de tu JS original
   const wordAt = (raw, o) => BigInt("0x" + raw.substr(o * 2, 64));
   const addrAt = (raw, o) => "0x" + raw.substr(o * 2 + 24, 40);
 
@@ -65,7 +63,6 @@ export const Web3Provider = ({ children }) => {
     }
   }, [ethCall]);
 
-  // Sincronizar propiedad isOwner de la wallet al mutar wallet o concilio
   useEffect(() => {
     if (wallet.address && council.ownerList.length > 0) {
       const isOwner = council.ownerList.includes(wallet.address.toLowerCase());

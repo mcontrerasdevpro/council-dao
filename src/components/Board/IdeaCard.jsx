@@ -23,7 +23,6 @@ export default function IdeaCard({ idea, queued, onSelect }) {
       let success = false;
       for (const gw of gateways) {
         try {
-          // Bajamos el tiempo de espera a 2 segundos para que la app sea rápida
           const r = await fetch(gw + path, { signal: AbortSignal.timeout(2000) });
           if (!r.ok) continue;
           const json = await r.json();
@@ -36,7 +35,6 @@ export default function IdeaCard({ idea, queued, onSelect }) {
         } catch { /** Siguiente gateway si este falla o tarda mucho **/ }
       }
 
-      // LÓGICA DE CONTROL OPERATIVO: Si IPFS falla, no congelamos la UI
       if (!success && isMounted) {
         setTitle(`Propuesta #${idea.id} · ${short(idea.cid)}`);
       }

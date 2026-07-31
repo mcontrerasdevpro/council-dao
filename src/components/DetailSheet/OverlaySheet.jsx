@@ -4,8 +4,9 @@ import { useWeb3, CFG } from "../../context/Web3Context.jsx";
 import { ethers } from "ethers";
 
 export const OverlaySheet = ({ active, onClose }) => {
-  const { idea, content } = active;
-  const { short, formatEther, resolveCalldata, SAFE_ABI } = useCryptoUtils();
+  const idea = active?.idea || active;
+  const content = active?.content || null;
+
   const { wallet, council } = useWeb3();
   const [progressMsg, setProgressMsg] = useState("");
   const [quorumData, setQuorumData] = useState(null);
@@ -46,12 +47,14 @@ export const OverlaySheet = ({ active, onClose }) => {
     }
   };
 
-  const variants = content?.acceptedOptions?.[0]?.variants || [];
-  const question = content?.acceptedOptions?.[0]?.title || "";
+  const question = content?.title || `Iniciativa Ciudadana #${idea.id}`;
+  const variants = content?.acceptedOptions?.[0]?.variants ||
+    content?.variants ||
+    ["A favor (Sí)", "En contra (No)", "Abstención"];
   const hasVoting = !!(content && typeof content.voting === "object" && content.voting);
   const gwUrl = CFG.gateway + (idea.cid || "").replace(/^ipfs:\/\//, "");
 
-  const esc = (s) => (s == null ? "" : String(s));
+  const esc = (t) => String(t || "");
 
   const refreshProgress = useCallback(async () => {
     if (!content || idea.status !== 0) return;
@@ -150,7 +153,7 @@ export const OverlaySheet = ({ active, onClose }) => {
       setProgressMsg(`Error en ejecución: ${e.message}`);
     }
   };
-  
+
   return (
     <div className="overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="sheet" role="dialog" aria-modal="true">
@@ -231,8 +234,8 @@ export const OverlaySheet = ({ active, onClose }) => {
               </p>
             </div>
 
-           <button 
-              className="act approve" 
+            <button
+              className="act approve"
               style={{ width: '100%', background: 'var(--ink)', color: 'var(--paper)' }}
               disabled={zkpLoading}
               onClick={handleAnonymousVote}

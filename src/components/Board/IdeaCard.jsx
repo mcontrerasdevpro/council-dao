@@ -11,19 +11,30 @@ export default function IdeaCard({ idea, queued, onSelect }) {
 
   useEffect(() => {
     let isMounted = true;
+    
     const fetchFromIPFS = async () => {
       if (!idea.cid) {
         setTitle(`Propuesta #${idea.id} (Sin CID)`);
         return;
       }
       
-      const path = idea.cid.replace(/^ipfs:\/\//, "");
-      const gateways = [CFG.gateway, "https://dweb.link", "https://ipfs.io"];
+      // Limpiamos cualquier rastro de protocolo antiguo del hash CID
+      const path = idea.cid.replace(/^ipfs:\/\//, "").replace(/^\//, "");
+      
+      // Forzamos los dominios limpios de las pasarelas
+      const gateways = [
+        "https://ipfs.io",
+        "https://dweb.link",
+        "https://pinata.cloud"
+      ];
       
       let success = false;
       for (const gw of gateways) {
         try {
-          const r = await fetch(gw + path, { signal: AbortSignal.timeout(2000) });
+          // Unimos forzando de forma explícita la barra / de separación en medio
+          const cleanUrl = `${gw}/${path}`;
+          
+          const r = await fetch(cleanUrl, { signal: AbortSignal.timeout(2000) });
           if (!r.ok) continue;
           const json = await r.json();
           if (isMounted) {
@@ -32,9 +43,10 @@ export default function IdeaCard({ idea, queued, onSelect }) {
             success = true;
             break;
           }
-        } catch { /** Siguiente gateway si este falla o tarda mucho **/ }
+        } catch { /** Salta a la siguiente pasarela si da error o timeout **/ }
       }
 
+      // Si las pasarelas fallan, usamos el plan de rescate para desbloquear el panel lateral
       if (!success && isMounted) {
         setTitle(`Propuesta #${idea.id} · ${short(idea.cid)}`);
       }
@@ -73,14 +85,16 @@ export default function IdeaCard({ idea, queued, onSelect }) {
           text: `${finalCount}/${council.threshold}`,
           className: `sig-badge ${finalCount === 0 ? "neutral" : type} ${finalCount >= council.threshold ? "ready" : ""}`
         });
-      } catch {}
+      } catch (e) {
+        console.error("Error al leer firmas:", e);
+      }
     };
 
     readSignatures();
-  }, [content, council, idea, resolveCalldata]);
+  }, [content, council, idea]);
 
   return (
-    <div className={`card ${queued ? "queued" : ""}`} onClick={() => onSelect(idea, content)}>
+    <div className={`card ${queued ? "queued" : ""}`} onClick={() => onSelect({ idea, content })}>
       <div className="t">
         <span className="tx">{title}</span>
         {queued ? (

@@ -426,17 +426,29 @@ function openDetail(el) {
   const dur = hasVoting ? c.voting.durationDays : undefined;
   const cz = hasVoting ? c.voting.eligibility?.citizenship : undefined;
   const elig = !hasVoting ? "—" : (Array.isArray(cz) && cz.length ? cz.join(", ") : "Cualquier nacionalidad");
+  const cera = hasVoting && c.voting.cera === true;
+  // Document type is mandatory in the CID: it selects the voting contract
+  // (dni -> IDCardVoting, passport -> BioPassportVoting). A voting idea without
+  // a valid `voting.document` cannot be promoted.
+  const docType = hasVoting ? c.voting.document : undefined;
+  const docValid = docType === "dni" || docType === "passport";
+  const docLabel = docType === "dni" ? "DNI" : docType === "passport" ? "Pasaporte" : "—";
   const gwUrl = CFG.gateway + (idea.cid || "").replace(/^ipfs:\/\//, "");
 
   const params = [
+    kv("Documento", docLabel),
     kv("Duración", dur != null ? dur + " días" : "—"),
     kv("Elegibilidad", elig),
+    // CERA row only when enabled (hidden dentro/fuera geo dimension).
+    ...(cera ? [kv("CERA", "Sí")] : []),
     kv("Idea id", "#" + idea.id),
   ];
   if (idea.proposalId) params.push(kv("Proposal", "#" + idea.proposalId));
 
   const warn = (loaded && !hasVoting)
     ? `<div class="d-warn">Le faltan los <b>parámetros de votación</b>. No puede promoverse a votación tal cual.</div>`
+    : (loaded && hasVoting && !docValid)
+    ? `<div class="d-warn">Falta o es inválido el <b>tipo de documento</b> (<code>voting.document</code> debe ser <code>"dni"</code> o <code>"passport"</code>). No puede promoverse.</div>`
     : "";
 
   $("sheetBody").innerHTML = `
@@ -561,12 +573,24 @@ if (window.ethereum) {
     refreshWalletBadge();
   });
   window.ethereum.on?.("chainChanged", () => location.reload());
+  (async () => {
+    try {
+      const accs = await window.ethereum.request({ method: "eth_accounts" });
+      if (!accs || !accs[0]) return;
+      const provider = new ethers.BrowserProvider(window.ethereum);
+      if ((await provider.getNetwork()).chainId !== 84532n) return; // only on Base Sepolia
+      WALLET.signer = await provider.getSigner();
+      WALLET.address = await WALLET.signer.getAddress();
+      refreshWalletBadge();
+    } catch { /* stay disconnected on any hiccup */ }
+  })();
 }
 
 // --- council actions (paso 2: componer resolve tx + approveHash + progreso) ---
 let CURRENT_DETAIL = null;
 const CARD_ELS = {}; // id -> elemento de la card (para actualizar badges)
-const BIO_VOTING = "0xdFe18d90F1eCDeF351a09444EAd99A89ec6749e2";
+const BIO_VOTING = "0xdFe18d90F1eCDeF351a09444EAd99A89ec6749e2"; // TD3 passport
+const ID_CARD_VOTING = "0xA69CDE67d624e4802516bf470f9645034401167d"; // TD1 DNIe
 const TS_UPPER = 4102444800n, ID_LIMIT = (1n << 32n) - 1n, ZERO_DATE = 0x303030303030n;
 const RULES_TYPE = "tuple(uint256 selector,uint256[] citizenshipWhitelist,uint256 identityCreationTimestampUpperBound,uint256 identityCounterUpperBound,uint256 sex,uint256 birthDateLowerbound,uint256 birthDateUpperbound,uint256 expirationDateLowerBound)";
 const SAFE_ABI = [
@@ -580,16 +604,62 @@ const REGISTRY_WRITE_ABI = ["function resolve(uint256 id,bool approve,(uint64 st
 const RO = () => new ethers.JsonRpcProvider(CFG.rpc);
 const RESOLVE_IFACE = new ethers.Interface(REGISTRY_WRITE_ABI);
 
+// Pack an ISO 3166-1 alpha-3 country code ("ESP") as ASCII big-endian, matching
+// the app's citizenshipToUint256 + on-chain UserData.citizenship. "ESP" -> 0x455350.
+function citizenshipToUint256(code) {
+  let acc = 0n;
+  for (const ch of String(code).toUpperCase()) acc = (acc << 8n) | BigInt(ch.charCodeAt(0));
+  return acc;
+}
+
 function buildProposalConfig(cid, content) {
+  // Document type is MANDATORY in the CID ("dni" | "passport"): it picks which
+  // voting contract the proposal is bound to. Selector, citizenship, age/expiry
+  // or CERA is document-agnostic: the ProposalRules blob has the same shape for both.
+  // The validator rejects a CID without a valid `voting.document`; this throw is
+  // defense-in-depth so a bad CID can never silently default to passport.
+  const doc = content?.voting?.document;
+  if (doc !== "dni" && doc !== "passport") {
+    throw new Error(`voting.document must be "dni" or "passport" (got ${JSON.stringify(doc)})`);
+  }
+  const voting = doc === "dni" ? ID_CARD_VOTING : BIO_VOTING;
   const variants = content?.acceptedOptions?.[0]?.variants || [];
   const n = BigInt(variants.length || 1);
-  const acceptedOptions = [(1n << n) - 1n];              // 3 variantes -> 7
+  const acceptedOptions = [(1n << n) - 1n];
+  // CERA: add a hidden 2nd question, 2 variants (bit0=in, bit1=abroad),
+  // mask 3 = 0b11. The contract then requires vote_.length==2, forcing the geo answer.
+  if (content?.voting?.cera === true) acceptedOptions.push(3n);
   const duration = BigInt(content?.voting?.durationDays || 90) * 86400n;
-  // eligibility: citizenship [] = abierto (selector=1, whitelist vacía). Enforcement solo-ES = TODO (packing + bit de selector).
-  const rules = [1n, [], TS_UPPER, ID_LIMIT, 0n, ZERO_DATE, ZERO_DATE, ZERO_DATE];
+  // eligibility.citizenship: [] = open (selector=1 = only the nullifier, empty
+  // whitelist). Non-empty = restrict to those nationalities. Enforcement is
+  // contract-side: BioPassportVoting._validateCitizenship requires
+  // userData.citizenship ∈ whitelist, and selector bit 5 (citizenship reveal)
+  // makes the circuit bind the passport's REAL nationality, without it the
+  // declared citizenship would go unchecked.
+  const citizenship = content?.voting?.eligibility?.citizenship || [];
+  const whitelist = citizenship.map(citizenshipToUint256);
+  // Selector bits: 0 = nullifier (always); 5 = reveal + gate nationality (only when
+  // restricted); 12 = passport-not-expired; 15 = age >= 18. Bits 12 and 15 are ALWAYS
+  // on. Verified empirically against queryIdentityMain23: they are real range checks,
+  // NOT reveals, so age and expiry are enforced without ever leaking on-chain.
+  let selector = 1n | (1n << 12n) | (1n << 15n);
+  if (whitelist.length) selector |= (1n << 5n);
+  // Age/expiry bounds as MRZ YYMMDD, computed at approval time. The circuit resolves
+  // the 2-digit-year century window itself from currentDate.
+  const mrzUint = (d) => {
+    const s = String(d.getUTCFullYear() % 100).padStart(2, "0")
+      + String(d.getUTCMonth() + 1).padStart(2, "0")
+      + String(d.getUTCDate()).padStart(2, "0");
+    let acc = 0n; for (const ch of s) acc = (acc << 8n) | BigInt(ch.charCodeAt(0)); return acc;
+  };
+  const now = new Date();
+  const born18 = new Date(Date.UTC(now.getUTCFullYear() - 18, now.getUTCMonth(), now.getUTCDate()));
+  const birthDateUpperbound = mrzUint(born18);   // born on/before today-18y => at least 18
+  const expirationDateLowerBound = mrzUint(now); // passport still valid at approval
+  const rules = [selector, whitelist, TS_UPPER, ID_LIMIT, 0n, ZERO_DATE, birthDateUpperbound, expirationDateLowerBound];
   const rulesData = ethers.AbiCoder.defaultAbiCoder().encode([RULES_TYPE], [rules]);
-  const startTimestamp = 0n; // en blanco: lo estampa el contrato al ejecutar (config determinista, cross-device)
-  return [startTimestamp, duration, 0n, acceptedOptions, cid, [BIO_VOTING], [rulesData]];
+  const startTimestamp = 0n;
+  return [startTimestamp, duration, 0n, acceptedOptions, cid, [voting], [rulesData]];
 }
 
 // calldata de resolve(id, approve, config). Determinista (startTimestamp=0 → lo estampa el contrato).
@@ -696,6 +766,9 @@ function renderActions(idea, content) {
     return;
   }
   const hasVoting = !!(content && typeof content.voting === "object" && content.voting);
+  // Promotable only if it has voting params AND a valid document type
+  const docType = hasVoting ? content.voting.document : undefined;
+  const canPromote = hasVoting && (docType === "dni" || docType === "passport");
   host.innerHTML = `<div class="d-lab">Acciones del council</div>
     <div class="d-actions">
       <button class="act approve" id="actApprove" disabled>Aprobar</button>
@@ -706,11 +779,11 @@ function renderActions(idea, content) {
   $("actApprove").onclick = () => { if (!$("actApprove").disabled) doApprove(idea, content, true); };
   $("actReject").onclick = () => { if (!$("actReject").disabled) doApprove(idea, content, false); };
   refreshProgress(idea, content);
-  applyVoteGuard(idea, content, hasVoting);
+  applyVoteGuard(idea, content, canPromote);
 }
 
 // guard: un signer no puede firmar aprobar Y rechazar la misma idea (approveHash no se puede retractar)
-async function applyVoteGuard(idea, content, hasVoting) {
+async function applyVoteGuard(idea, content, canPromote) {
   const a = $("actApprove"), r = $("actReject"), hint = $("actHint");
   if (!a || !r) return;
   let signedApprove = false, signedReject = false;
@@ -719,14 +792,14 @@ async function applyVoteGuard(idea, content, hasVoting) {
     const nonce = await safe.nonce();
     const [hA, hR] = await Promise.all([safeTxHash(safe, resolveCalldata(idea, content, true), nonce), safeTxHash(safe, resolveCalldata(idea, content, false), nonce)]);
     [signedApprove, signedReject] = (await Promise.all([safe.approvedHashes(WALLET.address, hA), safe.approvedHashes(WALLET.address, hR)])).map((x) => x > 0n);
-  } catch { /* lectura falló: habilitamos según hasVoting */ }
+  } catch { /* lectura falló (o config no promovible: buildProposalConfig lanza): gateamos por canPromote */ }
   a.textContent = signedApprove ? "Aprobado ✓" : "Aprobar";
   r.textContent = signedReject ? "Rechazado ✓" : "Rechazar";
-  a.disabled = signedApprove || signedReject || !hasVoting;
+  a.disabled = signedApprove || signedReject || !canPromote;
   r.disabled = signedReject || signedApprove;
   hint.innerHTML = signedApprove ? "Ya firmaste <b>aprobar</b> esta idea. Una firma no se puede retirar."
     : signedReject ? "Ya firmaste <b>rechazar</b> esta idea. Una firma no se puede retirar."
-    : !hasVoting ? "Aprobar deshabilitado: la idea no trae parámetros de votación."
+    : !canPromote ? "Aprobar deshabilitado: falta el <b>tipo de documento</b> (dni/passport) o los parámetros de votación."
     : "";
 }
 
